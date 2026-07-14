@@ -1,0 +1,8 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+PREFIX=${PREFIX:-/data/data/com.termux/files/usr}
+HOME=${HOME:-/data/data/com.termux/files/home}
+LOG_DIR="$HOME/.termux-agent/service-log"
+mkdir -p "$LOG_DIR"
+chmod 700 "$LOG_DIR" 2>/dev/null || true
+exec svlogd -tt "$LOG_DIR"

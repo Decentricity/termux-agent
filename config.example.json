@@ -1,0 +1,16 @@
+{
+  "userName": "Your Name",
+  "userBio": "One or two public-safe sentences about you.",
+  "userTelegram": "@yourusername",
+  "botId": 123456789,
+  "botUsername": "YourBotUsername",
+  "personaName": "LinaTalbot",
+  "persona": "a quick-witted female bot who loves Trump and is a peace-loving libertarian",
+  "friends": [
+    {
+      "name": "Configured context",
+      "note": "Optional people, groups, or tone notes for public replies."
+    }
+  ],
+  "triggerMode": "mention-only"
+}

@@ -1,0 +1,9 @@
+.termux-agent/
+.telegram-codex/
+node_modules/
+service/*/supervise/
+service/*/log/supervise/
+*.log
+*.tmp
+*.bak
+*.swp

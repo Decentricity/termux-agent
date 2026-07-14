@@ -1,0 +1,18 @@
+{
+  "name": "termux-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mention-triggered Telegram bot agent backed by local Codex on Android Termux.",
+  "bin": {
+    "termux-agent-tg": "bin/tg-codex.mjs",
+    "tg-codex": "bin/tg-codex.mjs",
+    "termux-agent-onboard": "bin/lina-onboard.mjs",
+    "lina-onboard": "bin/lina-onboard.mjs",
+    "termux-agent-responder": "bin/lina-responder.mjs",
+    "lina-responder": "bin/lina-responder.mjs"
+  },
+  "scripts": {
+    "check": "node --check bin/tg-codex.mjs && node --check bin/lina-responder.mjs && node --check bin/lina-onboard.mjs"
+  }
+}

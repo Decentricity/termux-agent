@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+PREFIX=${PREFIX:-/data/data/com.termux/files/usr}
+HOME=${HOME:-/data/data/com.termux/files/home}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+APP_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+export PREFIX HOME
+export PATH="$PREFIX/bin:$PATH"
+export TERMUX_AGENT_STATE_DIR="$HOME/.termux-agent"
+export TELEGRAM_CODEX_STATE_DIR="$TERMUX_AGENT_STATE_DIR"
+termux-wake-lock >/dev/null 2>&1 || true
+cd "$APP_DIR"
+exec "$PREFIX/bin/node" bin/tg-codex.mjs daemon
