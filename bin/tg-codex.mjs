@@ -136,12 +136,66 @@ function contentType(msg) {
   return "message";
 }
 
+function photoScore(photo = {}) {
+  if (!photo) return 0;
+  const area = Number(photo.width || 0) * Number(photo.height || 0);
+  return area || Number(photo.file_size || 0);
+}
+
+function largestPhoto(photos = []) {
+  return photos.reduce((best, photo) => (photoScore(photo) > photoScore(best) ? photo : best), null);
+}
+
+function imageMedia(msg) {
+  if (!msg) return null;
+  const photo = Array.isArray(msg.photo) ? largestPhoto(msg.photo) : null;
+  if (photo?.file_id) {
+    return {
+      kind: "photo",
+      fileId: photo.file_id,
+      fileUniqueId: photo.file_unique_id || "",
+      width: photo.width || 0,
+      height: photo.height || 0,
+      fileSize: photo.file_size || 0
+    };
+  }
+  const doc = msg.document;
+  if (doc?.file_id && String(doc.mime_type || "").startsWith("image/")) {
+    return {
+      kind: "image_document",
+      fileId: doc.file_id,
+      fileUniqueId: doc.file_unique_id || "",
+      fileName: doc.file_name || "",
+      mimeType: doc.mime_type || "",
+      fileSize: doc.file_size || 0
+    };
+  }
+  return null;
+}
+
 function senderName(user = {}) {
   return [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || String(user.id || "unknown");
 }
 
 function chatLabel(chat = {}) {
   return chat.title || chat.username || [chat.first_name, chat.last_name].filter(Boolean).join(" ") || String(chat.id || "");
+}
+
+function summarizeReply(msg) {
+  if (!msg) return null;
+  const from = msg.from || msg.sender_chat || {};
+  const text = messageText(msg);
+  const media = imageMedia(msg);
+  return {
+    messageId: msg.message_id,
+    fromId: from.id,
+    fromUsername: from.username || "",
+    fromName: senderName(from),
+    type: contentType(msg),
+    text,
+    summary: text || `[${contentType(msg)}]`,
+    ...(media ? { media } : {})
+  };
 }
 
 function summarizeMemberUpdate(update, kind) {
@@ -179,6 +233,8 @@ function summarizeUpdate(update) {
     const from = msg.from || msg.sender_chat || {};
     const timestamp = msg.date || Math.floor(Date.now() / 1000);
     const text = messageText(msg);
+    const media = imageMedia(msg);
+    const replyTo = summarizeReply(msg.reply_to_message);
     return {
       updateId: update.update_id,
       kind: update.edited_message || update.edited_channel_post ? "edited_message" : "message",
@@ -193,7 +249,9 @@ function summarizeUpdate(update) {
       fromName: senderName(from),
       type: contentType(msg),
       text,
-      summary: text || `[${contentType(msg)}]`
+      summary: text || `[${contentType(msg)}]`,
+      ...(media ? { media } : {}),
+      ...(replyTo ? { replyTo } : {})
     };
   }
   if (update.callback_query) {
@@ -371,7 +429,9 @@ function formatRow(row) {
   const chat = row.chatLabel ? `${row.chatLabel} (${row.chatId})` : row.chatId;
   const from = row.fromUsername ? `@${row.fromUsername}` : row.fromName || row.fromId || "unknown";
   const ids = hasArg("--ids") && row.messageId ? ` msg=${row.messageId}` : "";
-  return `[${row.isoTime}]${ids} ${from} @ ${chat}: ${row.summary}`;
+  const media = row.media?.kind ? ` [media:${row.media.kind}]` : "";
+  const replyMedia = row.replyTo?.media?.kind ? ` [reply-media:${row.replyTo.media.kind}]` : "";
+  return `[${row.isoTime}]${ids} ${from} @ ${chat}: ${row.summary}${media}${replyMedia}`;
 }
 
 async function printRecent() {

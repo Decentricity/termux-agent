@@ -13,12 +13,14 @@ const tokenPath = path.join(stateDir, "token");
 const configPath = path.join(stateDir, "config.json");
 const messagesPath = path.join(stateDir, "messages.jsonl");
 const responderPath = path.join(stateDir, "lina-responder.json");
+const mediaDir = path.join(stateDir, "media");
 const defaultBotUsername = process.env.LINA_BOT_USERNAME || "LinaTalbot";
 const defaultBotId = Number(process.env.LINA_BOT_ID || "5813078614");
 const pollMs = Number(process.env.LINA_RESPONDER_POLL_MS || "4000");
 const codexTimeoutMs = Number(process.env.LINA_CODEX_TIMEOUT_MS || "180000");
 const maxContextRows = Number(process.env.LINA_CONTEXT_ROWS || "28");
 const maxReplyChars = Number(process.env.LINA_MAX_REPLY_CHARS || "900");
+const maxImageAttachments = Number(process.env.LINA_MAX_IMAGE_ATTACHMENTS || "4");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const commandTimeoutMs = 3000;
@@ -29,6 +31,15 @@ function hasArg(name) {
 
 async function ensureState() {
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+}
+
+async function ensureMediaDir() {
+  await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
+  try {
+    await fs.chmod(mediaDir, 0o700);
+  } catch {
+    // Ignore chmod failures on storage layers that do not support POSIX modes.
+  }
 }
 
 async function readJson(file, fallback) {
@@ -75,6 +86,87 @@ async function telegramApi(method, payload = {}) {
     throw new Error(body?.description || `Telegram API ${method} failed with HTTP ${res.status}`);
   }
   return body.result;
+}
+
+function safeFileStem(value, fallback) {
+  return String(value || fallback || "telegram-image")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || fallback;
+}
+
+function extensionFrom(filePath, media = {}) {
+  let ext = path.extname(filePath || media.fileName || "").toLowerCase();
+  if (!/^\.[a-z0-9]{1,8}$/.test(ext)) {
+    ext = {
+      "image/jpeg": ".jpg",
+      "image/png": ".png",
+      "image/webp": ".webp",
+      "image/gif": ".gif",
+      "image/heic": ".heic",
+      "image/heif": ".heif"
+    }[String(media.mimeType || "").toLowerCase()] || ".jpg";
+  }
+  return ext;
+}
+
+function isImageMedia(media) {
+  return Boolean(media?.fileId && ["photo", "image_document"].includes(media.kind));
+}
+
+function imageAttachmentCandidates(trigger) {
+  const candidates = [];
+  if (isImageMedia(trigger.media)) {
+    candidates.push({ source: `trigger message ${trigger.messageId}`, messageId: trigger.messageId, media: trigger.media });
+  }
+  if (isImageMedia(trigger.replyTo?.media)) {
+    candidates.push({ source: `replied-to message ${trigger.replyTo.messageId}`, messageId: trigger.replyTo.messageId, media: trigger.replyTo.media });
+  }
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = candidate.media.fileUniqueId || candidate.media.fileId;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, maxImageAttachments);
+}
+
+async function downloadTelegramImage(candidate) {
+  const file = await telegramApi("getFile", { file_id: candidate.media.fileId });
+  if (!file?.file_path) throw new Error("Telegram did not return a downloadable file path");
+  await ensureMediaDir();
+  const ext = extensionFrom(file.file_path, candidate.media);
+  const stem = safeFileStem(candidate.media.fileUniqueId || candidate.media.fileId, `message-${candidate.messageId}`);
+  const localPath = path.join(mediaDir, `${stem}${ext}`);
+  if (!fsSync.existsSync(localPath)) {
+    const token = await readToken();
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
+    if (!res.ok) throw new Error(`Telegram file download failed with HTTP ${res.status}`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    await fs.writeFile(localPath, bytes, { mode: 0o600 });
+    try {
+      await fs.chmod(localPath, 0o600);
+    } catch {
+      // Ignore chmod failures on storage layers that do not support POSIX modes.
+    }
+  }
+  return {
+    ...candidate,
+    path: localPath,
+    bytes: file.file_size || candidate.media.fileSize || 0
+  };
+}
+
+async function collectImageAttachments(trigger) {
+  const attachments = [];
+  for (const candidate of imageAttachmentCandidates(trigger)) {
+    try {
+      attachments.push(await downloadTelegramImage(candidate));
+    } catch (err) {
+      attachments.push({ ...candidate, error: err?.message || String(err) });
+    }
+  }
+  return attachments;
 }
 
 async function sendReply(trigger, text) {
@@ -128,7 +220,9 @@ function shouldHandle(row, state, config) {
 
 function formatContextRow(row) {
   const from = row.fromUsername ? `@${row.fromUsername}` : row.fromName || row.fromId || "unknown";
-  return `${row.isoTime || ""} msg=${row.messageId || "?"} ${from}: ${row.summary || row.text || ""}`;
+  const media = row.media?.kind ? ` [image:${row.media.kind}]` : "";
+  const replyMedia = row.replyTo?.media?.kind ? ` [reply_to msg=${row.replyTo.messageId || "?"} image:${row.replyTo.media.kind}]` : "";
+  return `${row.isoTime || ""} msg=${row.messageId || "?"} ${from}: ${row.summary || row.text || ""}${media}${replyMedia}`;
 }
 
 function contextFor(rows, trigger) {
@@ -179,10 +273,19 @@ async function buildRuntimeSnapshot(config) {
   return entries.join("\n");
 }
 
-async function buildPrompt(trigger, contextRows, config) {
+async function buildPrompt(trigger, contextRows, config, attachments = []) {
   const chatName = trigger.chatLabel || trigger.chatId;
   const runtimeSnapshot = await buildRuntimeSnapshot(config);
   const friends = config.friends.map((friend) => `- ${friend.name}: ${friend.note}`).join("\n");
+  const imageLines = attachments.length
+    ? attachments.map((attachment, index) => {
+      const media = attachment.media || {};
+      const dimensions = media.width && media.height ? ` ${media.width}x${media.height}` : "";
+      const name = media.fileName ? ` ${media.fileName}` : "";
+      if (attachment.path) return `- Image ${index + 1}: ${attachment.source}; ${media.kind || "image"}${dimensions}${name}; attached to Codex image input.`;
+      return `- Image ${index + 1}: ${attachment.source}; ${media.kind || "image"}${dimensions}${name}; unavailable (${attachment.error}).`;
+    }).join("\n")
+    : "- None.";
   return `You are writing one Telegram reply as @${config.botUsername}.
 
 Persona for public chats:
@@ -196,6 +299,7 @@ Hard rules:
 - Do not include secrets, tokens, private file contents, exact credential paths, or private operator/developer details.
 - You may answer questions about your runtime using the controlled local runtime snapshot below. Keep it high-level unless the chat directly asks for specifics.
 - If asked whether you have CLI access, say you have a safe local status snapshot generated from CLI commands, not arbitrary public shell execution.
+- If image attachments are listed below, inspect the attached image input and respond to what is visible. Do not claim you saw an image if it is listed as unavailable.
 - Do not give medical, legal, or financial instructions; for health topics, keep it supportive and non-clinical.
 - Maximum ${maxReplyChars} characters.
 
@@ -204,6 +308,9 @@ The user/operator is ${config.userName} (${config.userTelegram}).
 Operator bio: ${config.userBio}
 Known people:
 ${friends || "- No named friends configured."}
+
+Image attachments:
+${imageLines}
 
 Recent chat context:
 ${contextRows.map(formatContextRow).join("\n")}
@@ -225,8 +332,9 @@ function cleanReply(raw) {
   return text;
 }
 
-async function runCodex(prompt) {
+async function runCodex(prompt, imagePaths = []) {
   const outPath = path.join(stateDir, `lina-codex-${Date.now()}-${process.pid}.txt`);
+  const imageArgs = imagePaths.filter(Boolean).flatMap((file) => ["-i", file]);
   const args = [
     "exec",
     "--ephemeral",
@@ -237,6 +345,7 @@ async function runCodex(prompt) {
     path.dirname(path.dirname(new URL(import.meta.url).pathname)),
     "-c",
     'model_reasoning_effort="low"',
+    ...imageArgs,
     "-o",
     outPath,
     "-"
@@ -311,10 +420,11 @@ async function processOnce() {
   for (const trigger of candidates) {
     const key = rowKey(trigger);
     const contextRows = contextFor(rows, trigger);
-    const prompt = await buildPrompt(trigger, contextRows, config);
+    const attachments = await collectImageAttachments(trigger);
+    const prompt = await buildPrompt(trigger, contextRows, config, attachments);
     let reply = "";
     try {
-      reply = await runCodex(prompt);
+      reply = await runCodex(prompt, attachments.map((attachment) => attachment.path).filter(Boolean));
       if (hasArg("--dry-run")) {
         console.log(`[dry-run] ${key}: ${reply}`);
       } else {
@@ -331,6 +441,13 @@ async function processOnce() {
           chatId: trigger.chatId,
           triggerMessageId: trigger.messageId,
           dryRun: hasArg("--dry-run"),
+          images: attachments.map((attachment) => ({
+            source: attachment.source,
+            messageId: attachment.messageId,
+            kind: attachment.media?.kind || "image",
+            savedAs: attachment.path ? path.basename(attachment.path) : "",
+            error: attachment.error || ""
+          })),
           reply
         }
       ].slice(-200);
@@ -353,8 +470,8 @@ async function testCodex() {
   const config = await loadConfig();
   const testMessage = process.env.LINA_TEST_MESSAGE || `@${config.botUsername} say hello in one sentence`;
   const trigger = {
-    chatId: -1002134033154,
-    chatLabel: "Myriad Pol",
+    chatId: Number(process.env.LINA_TEST_CHAT_ID || "-1000000000000"),
+    chatLabel: process.env.LINA_TEST_CHAT_LABEL || "Test Chat",
     messageId: 1,
     timestamp: Math.floor(Date.now() / 1000),
     isoTime: new Date().toISOString(),
@@ -363,7 +480,7 @@ async function testCodex() {
     text: testMessage,
     summary: testMessage
   };
-  const reply = await runCodex(await buildPrompt(trigger, [trigger], config));
+  const reply = await runCodex(await buildPrompt(trigger, [trigger], config, []), []);
   console.log(reply);
 }
 

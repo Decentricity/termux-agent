@@ -48,6 +48,8 @@ The responder is mention-only. In a group, users must tag the bot:
 @YourBotUsername what are you running on?
 ```
 
+If the tagged message contains a photo or replies to a photo/image document, the responder downloads that image into private state and passes it to Codex as an image input before replying.
+
 ## Commands
 
 Check bot status:
@@ -114,11 +116,14 @@ The Telegram group does not get arbitrary shell access.
 
 The responder can include a controlled local runtime snapshot in the Codex prompt. That snapshot is generated from a fixed safe command list: `uname`, Android `getprop` model/manufacturer/release, Node version, Codex version, and service statuses. This lets the bot answer high-level system questions without exposing tokens or allowing public command execution.
 
+For image understanding, the responder only downloads Telegram images attached to the triggering mention or its replied-to message. It does not expose arbitrary local files to public Telegram users.
+
 Private files:
 
 - `~/.termux-agent/token`: Telegram bot token.
 - `~/.termux-agent/config.json`: onboarding config.
 - `~/.termux-agent/messages.jsonl`: cached Telegram update summaries.
+- `~/.termux-agent/media/`: downloaded Telegram images used as Codex image inputs.
 - `~/.termux-agent/lina-responder.json`: responder dedupe/reply state.
 
 Do not publish these files.
