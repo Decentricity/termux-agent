@@ -9,7 +9,7 @@ The default persona is LinaTalbot, but onboarding lets each user configure the b
 - `termux-agent-tg` / `tg-codex`: Telegram Bot API CLI for token save, status, polling, recent messages, chats, and sends.
 - `termux-agent-onboard` / `lina-onboard`: interactive setup wizard.
 - `termux-agent-poller`: runit service that long-polls Telegram and caches updates.
-- `termux-agent-responder`: runit service that replies only when the bot is explicitly tagged.
+- `termux-agent-responder`: runit service that replies when the bot is explicitly tagged or someone directly replies to the bot.
 - Codex CLI for Termux Android, preferring `@mmmbuto/codex-cli-termux`.
 
 ## Fresh Termux Install
@@ -42,13 +42,13 @@ sv restart /data/data/com.termux/files/usr/var/service/termux-agent-responder
 
 Create a bot with BotFather and paste the token during onboarding. Add the bot to groups where it should respond.
 
-The responder is mention-only. In a group, users must tag the bot:
+In a group, users can tag the bot:
 
 ```text
 @YourBotUsername what are you running on?
 ```
 
-If the tagged message contains a photo or replies to a photo/image document, the responder downloads that image into private state and passes it to Codex as an image input before replying.
+The responder also replies when a user directly replies to one of the bot's messages, even without a tag. If the triggering message contains a photo or replies to a photo/image document, the responder downloads that image into private state and passes it to Codex as an image input before replying.
 
 ## Commands
 

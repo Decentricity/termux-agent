@@ -209,11 +209,18 @@ function mentionsBot(row, config) {
   return new RegExp(`@${config.botUsername}\\b`, "i").test(text);
 }
 
+function repliesToBot(row, config) {
+  const replyTo = row?.replyTo || {};
+  const botId = Number(config.botId || 0);
+  if (botId && Number(replyTo.fromId || 0) === botId) return true;
+  return Boolean(replyTo.fromUsername && config.botUsername && replyTo.fromUsername.toLowerCase() === config.botUsername.toLowerCase());
+}
+
 function shouldHandle(row, state, config) {
   if (!row || row.kind !== "message") return false;
   if (!row.chatId || !row.messageId) return false;
   if (Number(row.fromId || 0) === Number(config.botId || 0)) return false;
-  if (!mentionsBot(row, config)) return false;
+  if (!mentionsBot(row, config) && !repliesToBot(row, config)) return false;
   if ((row.updateId || 0) <= (state.ignoreBeforeUpdateId || 0)) return false;
   return !(state.handledKeys || []).includes(rowKey(row));
 }
@@ -258,7 +265,7 @@ async function buildRuntimeSnapshot(config) {
 
   entries.push(`timestamp: ${new Date().toISOString()}`);
   entries.push(`process: pid=${process.pid}, node=${process.version}, platform=${process.platform}, arch=${process.arch}`);
-  entries.push(`service: termux-agent-responder running from Termux home on Android; trigger mode is explicit @${config.botUsername} mentions only`);
+  entries.push(`service: termux-agent-responder running from Termux home on Android; trigger mode is explicit @${config.botUsername} mentions or direct replies to the bot`);
   await add("uname", binPath("uname"), ["-a"]);
   await add("android model", "/system/bin/getprop", ["ro.product.model"]);
   await add("android manufacturer", "/system/bin/getprop", ["ro.product.manufacturer"]);
