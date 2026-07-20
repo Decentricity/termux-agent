@@ -222,7 +222,10 @@ function shouldHandle(row, state, config) {
   if (Number(row.fromId || 0) === Number(config.botId || 0)) return false;
   if (!mentionsBot(row, config) && !repliesToBot(row, config)) return false;
   if ((row.updateId || 0) <= (state.ignoreBeforeUpdateId || 0)) return false;
-  return !(state.handledKeys || []).includes(rowKey(row));
+  const key = rowKey(row);
+  if ((state.handledKeys || []).includes(key)) return false;
+  const retry = state.errorRetries?.[key];
+  return !retry?.nextRetryAt || Date.parse(retry.nextRetryAt) <= Date.now();
 }
 
 function formatContextRow(row) {
@@ -440,6 +443,9 @@ async function processOnce() {
       }
       state = await readJson(responderPath, state);
       state.handledKeys = [...new Set([...(state.handledKeys || []), key])].slice(-1000);
+      if (state.errorRetries?.[key]) {
+        delete state.errorRetries[key];
+      }
       state.replies = [
         ...(state.replies || []),
         {
@@ -461,7 +467,16 @@ async function processOnce() {
       await writeJson(responderPath, state);
     } catch (err) {
       state = await readJson(responderPath, state);
-      state.handledKeys = [...new Set([...(state.handledKeys || []), key])].slice(-1000);
+      const attempts = Number(state.errorRetries?.[key]?.attempts || 0) + 1;
+      const retryDelayMs = Math.min(60 * 60 * 1000, 60 * 1000 * 2 ** Math.min(attempts - 1, 6));
+      state.errorRetries = {
+        ...(state.errorRetries || {}),
+        [key]: {
+          attempts,
+          lastErrorAt: new Date().toISOString(),
+          nextRetryAt: new Date(Date.now() + retryDelayMs).toISOString()
+        }
+      };
       state.errors = [
         ...(state.errors || []),
         { at: new Date().toISOString(), key, error: err?.message || String(err) }
