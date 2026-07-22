@@ -110,13 +110,15 @@ tail -f ~/.termux-agent/service-log/current
 tail -f ~/.termux-agent/responder-log/current
 ```
 
-## Safety Model
+## Access Model
 
-The Telegram group does not get arbitrary shell access.
+The responder runs Codex with full local CLI access on the Android/Termux device. When a Telegram message triggers Lina, Codex may inspect shared storage such as `/storage/emulated/0/Download`, Termux files, repos, services, running processes, installed CLIs, and generated artifacts as needed.
 
-The responder can include a controlled local runtime snapshot in the Codex prompt. That snapshot is generated from a fixed safe command list: `uname`, Android `getprop` model/manufacturer/release, Node version, Codex version, and service statuses. This lets the bot answer high-level system questions without exposing tokens or allowing public command execution.
+The responder still includes an initial runtime snapshot in the prompt, but Lina is not limited to that snapshot. She can use the local CLI through Codex when the Telegram context calls for it.
 
-For image understanding, the responder only downloads Telegram images attached to the triggering mention or its replied-to message. It does not expose arbitrary local files to public Telegram users.
+Public replies should not leak tokens, private credential file contents, exact credential paths, or private operator/developer details.
+
+For image understanding, the responder downloads Telegram images attached to the triggering mention or its replied-to message.
 
 Private files:
 

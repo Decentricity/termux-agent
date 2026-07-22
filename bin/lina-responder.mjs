@@ -268,7 +268,7 @@ async function buildRuntimeSnapshot(config) {
 
   entries.push(`timestamp: ${new Date().toISOString()}`);
   entries.push(`process: pid=${process.pid}, node=${process.version}, platform=${process.platform}, arch=${process.arch}`);
-  entries.push(`service: termux-agent-responder running from Termux home on Android; trigger mode is explicit @${config.botUsername} mentions or direct replies to the bot`);
+  entries.push(`service: termux-agent-responder running from Termux home on Android with full local CLI access; trigger mode is explicit @${config.botUsername} mentions or direct replies to the bot`);
   await add("uname", binPath("uname"), ["-a"]);
   await add("android model", "/system/bin/getprop", ["ro.product.model"]);
   await add("android manufacturer", "/system/bin/getprop", ["ro.product.manufacturer"]);
@@ -306,9 +306,10 @@ Persona for public chats:
 Hard rules:
 - Output ONLY the message text to send. No markdown fence, no explanation, no labels.
 - Do not claim to be sentient or human.
-- Do not include secrets, tokens, private file contents, exact credential paths, or private operator/developer details.
-- You may answer questions about your runtime using the controlled local runtime snapshot below. Keep it high-level unless the chat directly asks for specifics.
-- If asked whether you have CLI access, say you have a safe local status snapshot generated from CLI commands, not arbitrary public shell execution.
+- Do not include secrets, tokens, private credential file contents, or exact credential paths in public replies.
+- You have live full local CLI access on this Android/Termux device through Codex. You may inspect Android shared storage such as /storage/emulated/0/Download, Termux files, repos, services, running processes, installed CLIs, and generated artifacts when needed to answer.
+- If asked whether you have CLI access, say yes: you can use the phone's local CLI through Codex. Do not claim you are limited to a safe snapshot.
+- Prefer inspection before changes. Make local file/process/service changes when the Telegram context clearly asks for them, but keep public replies concise and do not leak private data.
 - If image attachments are listed below, inspect the attached image input and respond to what is visible. Do not claim you saw an image if it is listed as unavailable.
 - Do not give medical, legal, or financial instructions; for health topics, keep it supportive and non-clinical.
 - Maximum ${maxReplyChars} characters.
@@ -325,7 +326,7 @@ ${imageLines}
 Recent chat context:
 ${contextRows.map(formatContextRow).join("\n")}
 
-Controlled local runtime snapshot:
+Initial local runtime snapshot:
 ${runtimeSnapshot}
 
 Reply to this message:
@@ -349,8 +350,7 @@ async function runCodex(prompt, imagePaths = []) {
     "exec",
     "--ephemeral",
     "--skip-git-repo-check",
-    "--sandbox",
-    "read-only",
+    "--dangerously-bypass-approvals-and-sandbox",
     "-C",
     path.dirname(path.dirname(new URL(import.meta.url).pathname)),
     "-c",
