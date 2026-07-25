@@ -127,5 +127,6 @@ Private files:
 - `~/.termux-agent/messages.jsonl`: cached Telegram update summaries.
 - `~/.termux-agent/media/`: downloaded Telegram images used as Codex image inputs.
 - `~/.termux-agent/lina-responder.json`: responder dedupe/reply state.
+- `~/.termux-agent/lina-responder.lock`: singleton lock to prevent duplicate responder processes.
 
 Do not publish these files.

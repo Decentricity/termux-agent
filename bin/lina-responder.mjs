@@ -14,6 +14,7 @@ const configPath = path.join(stateDir, "config.json");
 const messagesPath = path.join(stateDir, "messages.jsonl");
 const responderPath = path.join(stateDir, "lina-responder.json");
 const mediaDir = path.join(stateDir, "media");
+const responderLockPath = path.join(stateDir, "lina-responder.lock");
 const defaultBotUsername = process.env.LINA_BOT_USERNAME || "LinaTalbot";
 const defaultBotId = Number(process.env.LINA_BOT_ID || "5813078614");
 const pollMs = Number(process.env.LINA_RESPONDER_POLL_MS || "4000");
@@ -21,6 +22,8 @@ const codexTimeoutMs = Number(process.env.LINA_CODEX_TIMEOUT_MS || "180000");
 const maxContextRows = Number(process.env.LINA_CONTEXT_ROWS || "28");
 const maxReplyChars = Number(process.env.LINA_MAX_REPLY_CHARS || "900");
 const maxImageAttachments = Number(process.env.LINA_MAX_IMAGE_ATTACHMENTS || "4");
+const lockPollMs = Number(process.env.LINA_LOCK_POLL_MS || "15000");
+let ownsResponderLock = false;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const commandTimeoutMs = 3000;
@@ -52,6 +55,72 @@ async function readJson(file, fallback) {
 
 async function writeJson(file, data) {
   await fs.writeFile(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+}
+
+function readLockPid(raw) {
+  try {
+    return Number(JSON.parse(raw).pid || 0);
+  } catch {
+    return Number(String(raw || "").trim().split(/\s+/)[0] || 0);
+  }
+}
+
+function responderProcessAlive(pid) {
+  if (!pid || pid === process.pid) return false;
+  try {
+    const cmdline = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return cmdline.includes("lina-responder.mjs");
+  } catch {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function tryAcquireResponderLock() {
+  await ensureState();
+  try {
+    await fs.writeFile(responderLockPath, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`, {
+      flag: "wx",
+      mode: 0o600
+    });
+    ownsResponderLock = true;
+    return true;
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+  }
+
+  let raw = "";
+  try {
+    raw = await fs.readFile(responderLockPath, "utf8");
+  } catch {
+    return tryAcquireResponderLock();
+  }
+  const pid = readLockPid(raw);
+  if (responderProcessAlive(pid)) return false;
+  await fs.rm(responderLockPath, { force: true });
+  return tryAcquireResponderLock();
+}
+
+async function acquireResponderLock() {
+  while (!(await tryAcquireResponderLock())) {
+    console.error(`[${new Date().toISOString()}] another lina responder is active; waiting for singleton lock`);
+    await sleep(lockPollMs);
+  }
+}
+
+function releaseResponderLock() {
+  if (!ownsResponderLock) return;
+  try {
+    const pid = readLockPid(fsSync.readFileSync(responderLockPath, "utf8"));
+    if (pid === process.pid) fsSync.unlinkSync(responderLockPath);
+  } catch {
+    // Ignore cleanup failures; stale locks are removed on next startup.
+  }
+  ownsResponderLock = false;
 }
 
 async function loadConfig() {
@@ -511,6 +580,8 @@ async function main() {
     await testCodex();
     return;
   }
+  await acquireResponderLock();
+  process.on("exit", releaseResponderLock);
   let stopping = false;
   process.on("SIGINT", () => {
     stopping = true;
@@ -524,10 +595,12 @@ async function main() {
     if (hasArg("--once")) break;
     await sleep(pollMs);
   } while (!stopping);
+  releaseResponderLock();
   console.log(`[${new Date().toISOString()}] lina responder stopped`);
 }
 
 main().catch((err) => {
+  releaseResponderLock();
   console.error(`[${new Date().toISOString()}] fatal: ${err?.message || err}`);
   process.exitCode = 1;
 });
