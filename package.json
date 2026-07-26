@@ -10,9 +10,11 @@
     "termux-agent-onboard": "bin/lina-onboard.mjs",
     "lina-onboard": "bin/lina-onboard.mjs",
     "termux-agent-responder": "bin/lina-responder.mjs",
-    "lina-responder": "bin/lina-responder.mjs"
+    "lina-responder": "bin/lina-responder.mjs",
+    "youtube-transcript": "bin/youtube-transcript.mjs",
+    "termux-agent-youtube-transcript": "bin/youtube-transcript.mjs"
   },
   "scripts": {
-    "check": "node --check bin/tg-codex.mjs && node --check bin/lina-responder.mjs && node --check bin/lina-onboard.mjs"
+    "check": "node --check bin/tg-codex.mjs && node --check bin/lina-responder.mjs && node --check bin/lina-onboard.mjs && node --check bin/youtube-transcript.mjs"
   }
 }

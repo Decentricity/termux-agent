@@ -22,6 +22,8 @@ const codexTimeoutMs = Number(process.env.LINA_CODEX_TIMEOUT_MS || "180000");
 const maxContextRows = Number(process.env.LINA_CONTEXT_ROWS || "28");
 const maxReplyChars = Number(process.env.LINA_MAX_REPLY_CHARS || "900");
 const maxImageAttachments = Number(process.env.LINA_MAX_IMAGE_ATTACHMENTS || "4");
+const maxYoutubeTranscripts = Number(process.env.LINA_MAX_YOUTUBE_TRANSCRIPTS || "2");
+const maxYoutubeTranscriptChars = Number(process.env.LINA_YOUTUBE_TRANSCRIPT_CHARS || "12000");
 const lockPollMs = Number(process.env.LINA_LOCK_POLL_MS || "15000");
 let ownsResponderLock = false;
 
@@ -304,6 +306,78 @@ function formatContextRow(row) {
   return `${row.isoTime || ""} msg=${row.messageId || "?"} ${from}: ${row.summary || row.text || ""}${media}${replyMedia}`;
 }
 
+function extractYoutubeUrls(text = "") {
+  const matches = String(text).match(/(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\/[^\s<>"']+/gi) || [];
+  return matches.map((url) => {
+    const clean = url.replace(/[)\].,!?;:]+$/g, "");
+    return /^https?:\/\//i.test(clean) ? clean : `https://${clean}`;
+  });
+}
+
+function rowText(row = {}) {
+  return [row.text, row.summary, row.replyTo?.text, row.replyTo?.summary].filter(Boolean).join("\n");
+}
+
+function asksForVideo(trigger = {}) {
+  return /\b(?:watch|video|youtube|youtu\.be|transcript|caption|link)\b/i.test(rowText(trigger));
+}
+
+function youtubeCandidates(trigger, contextRows) {
+  const candidates = [];
+  const addUrls = (source, messageId, text) => {
+    for (const url of extractYoutubeUrls(text)) candidates.push({ source, messageId, url });
+  };
+
+  addUrls(`trigger message ${trigger.messageId}`, trigger.messageId, rowText(trigger));
+  if (trigger.replyTo) addUrls(`replied-to message ${trigger.replyTo.messageId}`, trigger.replyTo.messageId, rowText(trigger.replyTo));
+
+  if (!candidates.length && asksForVideo(trigger)) {
+    for (const row of contextRows.slice(-8).reverse()) {
+      addUrls(`nearby message ${row.messageId}`, row.messageId, rowText(row));
+      if (candidates.length) break;
+    }
+  }
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.url)) return false;
+    seen.add(candidate.url);
+    return true;
+  }).slice(0, maxYoutubeTranscripts);
+}
+
+function runLongCommand(command, args = [], options = {}) {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: options.timeout || 150000, cwd: options.cwd }, (err, stdout, stderr) => {
+      const output = `${stdout || ""}${stderr ? `\n${stderr}` : ""}`.trim();
+      if (err) {
+        resolve({ ok: false, output: `${err.message}${output ? `\n${output}` : ""}` });
+        return;
+      }
+      resolve({ ok: true, output });
+    });
+  });
+}
+
+async function collectYoutubeTranscripts(trigger, contextRows) {
+  const transcripts = [];
+  const scriptPath = path.join(path.dirname(path.dirname(new URL(import.meta.url).pathname)), "bin", "youtube-transcript.mjs");
+  for (const candidate of youtubeCandidates(trigger, contextRows)) {
+    const result = await runLongCommand(binPath("node"), [
+      scriptPath,
+      candidate.url,
+      "--max-chars",
+      String(maxYoutubeTranscriptChars)
+    ]);
+    transcripts.push({
+      ...candidate,
+      text: result.ok ? result.output : "",
+      error: result.ok ? "" : result.output
+    });
+  }
+  return transcripts;
+}
+
 function contextFor(rows, trigger) {
   return rows
     .filter((row) => String(row.chatId) === String(trigger.chatId))
@@ -352,7 +426,7 @@ async function buildRuntimeSnapshot(config) {
   return entries.join("\n");
 }
 
-async function buildPrompt(trigger, contextRows, config, attachments = []) {
+async function buildPrompt(trigger, contextRows, config, attachments = [], youtubeTranscripts = []) {
   const chatName = trigger.chatLabel || trigger.chatId;
   const runtimeSnapshot = await buildRuntimeSnapshot(config);
   const friends = config.friends.map((friend) => `- ${friend.name}: ${friend.note}`).join("\n");
@@ -364,6 +438,14 @@ async function buildPrompt(trigger, contextRows, config, attachments = []) {
       if (attachment.path) return `- Image ${index + 1}: ${attachment.source}; ${media.kind || "image"}${dimensions}${name}; attached to Codex image input.`;
       return `- Image ${index + 1}: ${attachment.source}; ${media.kind || "image"}${dimensions}${name}; unavailable (${attachment.error}).`;
     }).join("\n")
+    : "- None.";
+  const youtubeLines = youtubeTranscripts.length
+    ? youtubeTranscripts.map((transcript, index) => {
+      if (transcript.text) {
+        return `--- YouTube transcript ${index + 1}: ${transcript.source}\nURL: ${transcript.url}\n${transcript.text}`;
+      }
+      return `- YouTube transcript ${index + 1}: ${transcript.source}; ${transcript.url}; unavailable (${transcript.error})`;
+    }).join("\n\n")
     : "- None.";
   return `You are writing one Telegram reply as @${config.botUsername}.
 
@@ -380,6 +462,7 @@ Hard rules:
 - If asked whether you have CLI access, say yes: you can use the phone's local CLI through Codex. Do not claim you are limited to a safe snapshot.
 - Prefer inspection before changes. Make local file/process/service changes when the Telegram context clearly asks for them, but keep public replies concise and do not leak private data.
 - If image attachments are listed below, inspect the attached image input and respond to what is visible. Do not claim you saw an image if it is listed as unavailable.
+- If asked to watch, inspect, summarize, or react to a YouTube video/link, use only the fetched transcript block below. Do not download video/audio, do not invent visual details, and say clearly if no transcript is available.
 - Do not give medical, legal, or financial instructions; for health topics, keep it supportive and non-clinical.
 - Maximum ${maxReplyChars} characters.
 
@@ -391,6 +474,9 @@ ${friends || "- No named friends configured."}
 
 Image attachments:
 ${imageLines}
+
+YouTube transcripts:
+${youtubeLines}
 
 Recent chat context:
 ${contextRows.map(formatContextRow).join("\n")}
@@ -500,7 +586,8 @@ async function processOnce() {
     const key = rowKey(trigger);
     const contextRows = contextFor(rows, trigger);
     const attachments = await collectImageAttachments(trigger);
-    const prompt = await buildPrompt(trigger, contextRows, config, attachments);
+    const youtubeTranscripts = await collectYoutubeTranscripts(trigger, contextRows);
+    const prompt = await buildPrompt(trigger, contextRows, config, attachments, youtubeTranscripts);
     let reply = "";
     try {
       reply = await runCodex(prompt, attachments.map((attachment) => attachment.path).filter(Boolean));
@@ -529,6 +616,13 @@ async function processOnce() {
             kind: attachment.media?.kind || "image",
             savedAs: attachment.path ? path.basename(attachment.path) : "",
             error: attachment.error || ""
+          })),
+          youtube: youtubeTranscripts.map((transcript) => ({
+            source: transcript.source,
+            messageId: transcript.messageId,
+            url: transcript.url,
+            fetched: Boolean(transcript.text),
+            error: transcript.error || ""
           })),
           reply
         }
@@ -571,7 +665,7 @@ async function testCodex() {
     text: testMessage,
     summary: testMessage
   };
-  const reply = await runCodex(await buildPrompt(trigger, [trigger], config, []), []);
+  const reply = await runCodex(await buildPrompt(trigger, [trigger], config, [], []), []);
   console.log(reply);
 }
 

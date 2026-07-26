@@ -8,6 +8,7 @@ The default persona is LinaTalbot, but onboarding lets each user configure the b
 
 - `termux-agent-tg` / `tg-codex`: Telegram Bot API CLI for token save, status, polling, recent messages, chats, and sends.
 - `termux-agent-onboard` / `lina-onboard`: interactive setup wizard.
+- `youtube-transcript` / `termux-agent-youtube-transcript`: helper that fetches YouTube captions/transcripts via `yt-dlp`.
 - `termux-agent-poller`: runit service that long-polls Telegram and caches updates.
 - `termux-agent-responder`: runit service that replies when the bot is explicitly tagged or someone directly replies to the bot.
 - Codex CLI for Termux Android, preferring `@mmmbuto/codex-cli-termux`.
@@ -23,13 +24,14 @@ chmod 700 install.sh
 
 The installer will:
 
-1. Install Termux packages: `nodejs`, `git`, `termux-services`, and `termux-api`.
+1. Install Termux packages: `nodejs`, `git`, `python`, `termux-services`, and `termux-api`.
 2. Install Codex if missing.
-3. Start onboarding by asking for your name and quick public-safe bio.
-4. Ask you to log in to Codex if needed.
-5. Ask for your Telegram bot token from BotFather and verify it with `getMe`.
-6. Save private config under `~/.termux-agent/`.
-7. Link and start the poller and responder services.
+3. Install/upgrade `yt-dlp` for YouTube transcript fetching.
+4. Start onboarding by asking for your name and quick public-safe bio.
+5. Ask you to log in to Codex if needed.
+6. Ask for your Telegram bot token from BotFather and verify it with `getMe`.
+7. Save private config under `~/.termux-agent/`.
+8. Link and start the poller and responder services.
 
 If Codex login is skipped during onboarding, run:
 
@@ -120,12 +122,15 @@ Public replies should not leak tokens, private credential file contents, exact c
 
 For image understanding, the responder downloads Telegram images attached to the triggering mention or its replied-to message.
 
+For YouTube links, the responder scans the triggering message, replied-to message, and nearby visible context for `youtube.com` or `youtu.be` URLs. If found, it fetches captions/transcripts with `youtube-transcript`/`yt-dlp` and gives Codex the transcript text. It does not download video/audio or pretend to inspect visual frames.
+
 Private files:
 
 - `~/.termux-agent/token`: Telegram bot token.
 - `~/.termux-agent/config.json`: onboarding config.
 - `~/.termux-agent/messages.jsonl`: cached Telegram update summaries.
 - `~/.termux-agent/media/`: downloaded Telegram images used as Codex image inputs.
+- `~/.termux-agent/youtube-transcripts/`: cached YouTube transcript text.
 - `~/.termux-agent/lina-responder.json`: responder dedupe/reply state.
 - `~/.termux-agent/lina-responder.lock`: singleton lock to prevent duplicate responder processes.
 

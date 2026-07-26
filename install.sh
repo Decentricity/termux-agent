@@ -19,7 +19,7 @@ install_termux_packages() {
     exit 1
   fi
   pkg update -y
-  pkg install -y nodejs git termux-services termux-api
+  pkg install -y nodejs git python termux-services termux-api
 }
 
 install_codex() {
@@ -66,6 +66,7 @@ chmod 700 "$APP_DIR/service/termux-agent-responder/run" "$APP_DIR/service/termux
 
 install_termux_packages
 install_codex
+python -m pip install --upgrade yt-dlp
 
 mkdir -p "$BIN_DIR" "$STATE_DIR" "$SERVICE_DIR"
 chmod 700 "$BIN_DIR" "$STATE_DIR"
@@ -75,6 +76,8 @@ write_wrapper lina-onboard bin/lina-onboard.mjs
 write_wrapper termux-agent-onboard bin/lina-onboard.mjs
 write_wrapper lina-responder bin/lina-responder.mjs
 write_wrapper termux-agent-responder bin/lina-responder.mjs
+write_wrapper youtube-transcript bin/youtube-transcript.mjs
+write_wrapper termux-agent-youtube-transcript bin/youtube-transcript.mjs
 
 echo
 echo "Starting onboarding. It begins with your name and quick bio."
